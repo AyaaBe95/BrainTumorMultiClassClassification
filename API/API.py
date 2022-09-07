@@ -12,12 +12,17 @@ import urllib.request
 import pandas as pd
 import cv2
 from flask import Flask ,request, jsonify
+from tensorflow.keras.models import Model, load_model, Sequential
+import numpy as np
+import pandas as pd
+import cv2 as cv2
+import matplotlib.pyplot as plt
 
 
-cred = credentials.Certificate("databases/finalproject-d0098-firebase-adminsdk-6xssm-13f86075b6.json")
-firebase_admin.initialize_app(cred,{'databaseURL':'https://finalproject-d0098-default-rtdb.firebaseio.com/','httpTimeout':30})
+cred = credentials.Certificate("./API/databases/finalproject-d0098-firebase-adminsdk-6xssm-13f86075b6.json")
+firebase_admin.initialize_app(cred,{'databaseURL':'https://finalproject-d0098-default-rtdb.firebaseio.com/','httpTimeout':100})
 
-conn = sqlite3.connect('databases/Project.db',check_same_thread=False)
+conn = sqlite3.connect('./API/databases/Project.db',check_same_thread=False)
 curr=conn.cursor()
 
 query='''CREATE TABLE IF NOT EXISTS Data  (
@@ -63,7 +68,7 @@ def insert_data():
         image=str(request.args.get('image'))
         sql = """ INSERT INTO Data
                 (img,img_size,date,time,result,flag) VALUES (?, ?, ?, ?, ?, ?)"""
-
+        model=load_model('C:\\Users\\HP\\BrainTumorMultiClassClassification\\Model\\inceptionResNet.h5')
         img = convertToBinaryData(image) # local database
         img2=convertToBinaryData2(image) # firebase
         now = datetime.now()
@@ -78,13 +83,15 @@ def insert_data():
             coded_image=readImage(int(imgID))
             img_size=coded_image.shape # get size of the image
             size=updateImageSize(imgID,img_size) # update its size
+            prediction=predict(coded_image,model)
+            result=prediction[0]
+            update_result(int(imgID),result)
 
             if connect(): # check if there is an internet
-
                 updateFlag(imgID) # set flag = 1
                 insert_into_firebase(imgID,img2,size,curr_date,curr_time,result) # insert data into firebase
             conn.commit()
-            return jsonify(size)
+            return f'The image is predicted as being {result} with a probability of  {prediction[1]:6.2f} %'
         except sqlite3.Error as error:
             return "Failed to insert data ", error
 
@@ -100,7 +107,6 @@ def get_data_from_interval():
     sql = 'SELECT img_size,date,time,result FROM  Data WHERE date between ? and ? '
     start=str(request.args.get('start'))
     end=str(request.args.get('end'))
-
     try:
         curr.execute(sql,(start,end))
         data = curr.fetchall()
@@ -117,6 +123,20 @@ def get_data_from_interval():
         if conn:
             conn.commit()
             conn.close()
+
+def predict(input_img,model):
+
+    img_size=(200,200)
+    img=input_img/127.5-1 # rescale pixels
+    img=cv2.resize(img, img_size) # in earlier 
+    img=np.expand_dims(img, axis=0)
+    pred=model.predict(img)
+    index=np.argmax(pred[0])
+    classes=['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor']
+    klass=classes[index]
+    probability=pred[0][index]*100
+    # print(f'the image is predicted as being {klass} with a probability of {probability:6.2f} %')
+    return [klass,probability]
 
 
 def run_app():
@@ -160,7 +180,7 @@ def getImageById(id):
         record = curr.fetchall()
         for row in record:
             img = row[1]
-        path= './resulted_images/img' + str(id) + '.jpg'
+        path= './API/resulted_images/img' + str(id) + '.jpg'
 
         with open(path,"wb") as file:
             file.write(img)
@@ -263,12 +283,13 @@ def upload_unsaved_data():
             updateFlag(i['id'])
 
 
-# run the app every 5 minutes in order to upload unsaved data into firebase
+# run the app every 3 minutes in order to upload unsaved data into firebase
+
 if __name__ == "__main__":
     while 1:
         first_thread = threading.Thread(target=run_app)
         second_thread = threading.Thread(target=upload_unsaved_data)
         first_thread.start()
         second_thread.start()
-        time.sleep(20)
+        time.sleep(300)
 
