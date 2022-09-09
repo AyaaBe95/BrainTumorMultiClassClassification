@@ -28,10 +28,12 @@ curr=conn.cursor()
 query='''CREATE TABLE IF NOT EXISTS Data  (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     img BLOB,
+    patientID INTEGER,
     img_size TEXT,
 	date TEXT,
     time TEXT,
 	result TEXT,
+    probability FLOAT,
 	flag INTEGER
 );'''
 
@@ -46,6 +48,7 @@ def convertToBinaryData(filename):
     return blobData
 
 # convert image to binary to insert it in firebase
+
 def convertToBinaryData2(filename):
     img_dict = {}
     with open(filename,"rb") as file:
@@ -66,17 +69,20 @@ def insert_data():
         conn
         curr
         image=str(request.args.get('image'))
+        patientID=int(request.args.get('patientID'))
         sql = """ INSERT INTO Data
-                (img,img_size,date,time,result,flag) VALUES (?, ?, ?, ?, ?, ?)"""
-        model=load_model('C:\\Users\\HP\\BrainTumorMultiClassClassification\\Model\\inceptionResNet.h5')
+                (img,patientID,img_size,date,time,result,probability,flag) VALUES (?, ?, ?,?, ?, ?,?, ?)"""
+
+        model=load_model('C:\\Users\\HP\\Desktop\\inceptionResNet.h5')
         img = convertToBinaryData(image) # local database
         img2=convertToBinaryData2(image) # firebase
         now = datetime.now()
         curr_date = now.strftime("%d/%m/%Y")
         curr_time=now.strftime("%H:%M:%S")
+        probability=1.0
         result='none'
         flag=0 # if 1 means data has been inserted into local database and firebase ,if not means data has been inserted only in firebase
-        data_tuple = (img, 1 , str(curr_date), str(curr_time), result,flag)
+        data_tuple = (img,patientID,1,str(curr_date),str(curr_time),result,probability,flag)
         try:
             curr.execute(sql, data_tuple)
             imgID = curr.lastrowid
@@ -85,13 +91,15 @@ def insert_data():
             size=updateImageSize(imgID,img_size) # update its size
             prediction=predict(coded_image,model)
             result=prediction[0]
+            probability=round(prediction[1],2)
             update_result(int(imgID),result)
+            updateProbabilityOfResult(int(imgID),probability)
 
             if connect(): # check if there is an internet
                 updateFlag(imgID) # set flag = 1
-                insert_into_firebase(imgID,img2,size,curr_date,curr_time,result) # insert data into firebase
+                insert_into_firebase(imgID,patientID,img2,size,curr_date,curr_time,result,probability) # insert data into firebase
             conn.commit()
-            return f'The image is predicted as being {result} with a probability of  {prediction[1]:6.2f} %'
+            return f'The image is predicted as being {result} with a probability of  {probability:6.2f} %'
         except sqlite3.Error as error:
             return "Failed to insert data ", error
 
@@ -100,18 +108,19 @@ def insert_data():
                 conn.commit()
 
 # get a reprot that contains info between two dates
+
 @app.route('/get')
 def get_data_from_interval():
     curr
     conn
-    sql = 'SELECT img_size,date,time,result FROM  Data WHERE date between ? and ? '
+    sql = 'SELECT patientID,img_size,date,time,result,probability FROM  Data WHERE date between ? and ? '
     start=str(request.args.get('start'))
     end=str(request.args.get('end'))
     try:
         curr.execute(sql,(start,end))
         data = curr.fetchall()
         conn.commit()
-        df=pd.DataFrame(data=data,columns=['Image Size','Date','Time','Result'])
+        df=pd.DataFrame(data=data,columns=['Patient ID','Image Size','Date','Time','Result', 'Probability'])
         n = random.randint(1,99)
         filename='report' + str(n) # generate the file
         path ='reports/' + filename +'.csv' 
@@ -125,7 +134,6 @@ def get_data_from_interval():
             conn.close()
 
 def predict(input_img,model):
-
     img_size=(200,200)
     img=input_img/127.5-1 # rescale pixels
     img=cv2.resize(img, img_size) # in earlier 
@@ -143,17 +151,19 @@ def run_app():
     app.run(debug=False,threaded=True)
 
 # insert data into firebase
-def insert_into_firebase(id,img,size,date,time,result):
+def insert_into_firebase(id,patientID,img,size,date,time,result,probability):
     ref='/data/' + str(id) + '/'
     root=db.reference(ref)
     try:
         data={
             'id':id,
+            'patientID':patientID,
             'img':img,
             'img_size':size,
             'date':date,
             'time':time,
-            'result':result
+            'result':result,
+            'probability':probability
             }
         root.set(data)
         return True
@@ -213,6 +223,20 @@ def updateImageSize(id,size):
         if conn:
             conn.commit()
 
+def updateProbabilityOfResult (id,probability):
+    conn
+    curr
+    sql = 'UPDATE Data SET probability = ? where id == ? '
+    try:
+        curr.execute(sql,(probability,id))
+        conn.commit()
+        return probability
+    except:
+        return "Data does not exsist"
+    finally:
+        if conn:
+            conn.commit()
+
 # update the result after prediction
 def update_result(id,result):
     conn
@@ -246,7 +270,7 @@ def updateFlag(id):
 def getData():
     conn
     curr 
-    sql = 'SELECT id, img , img_size,date,time,result FROM  Data WHERE flag == 0'
+    sql = 'SELECT id,patientID,img ,img_size,date,time,result,probability FROM Data WHERE flag == 0'
     try:
         curr.execute(sql)
         data = curr.fetchall()
@@ -268,11 +292,13 @@ def upload_unsaved_data():
         for i in range(len(data)):
             dict={
                 'id':data[i][0],
-                'img':str(data[i][1]),
-                'img_size':data[i][2],
-                'date':str(data[i][3]),
-                'time':str(data[i][4]),
-                'result': str(data[i][5])
+                'patientID':data[i][1],
+                'img':str(data[i][2]),
+                'img_size':data[i][3],
+                'date':str(data[i][4]),
+                'time':str(data[i][5]),
+                'result': str(data[i][6]),
+                'probability':data[i][7]
             }
             list.append(dict)
 
