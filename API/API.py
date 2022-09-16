@@ -11,8 +11,9 @@ from firebase_admin import credentials , db
 import urllib.request
 import pandas as pd
 import cv2
-from flask import Flask ,request, jsonify
+from flask import Flask ,request
 from tensorflow.keras.models import Model, load_model, Sequential
+import xlwings as xw
 import numpy as np
 import pandas as pd
 import cv2 as cv2
@@ -38,7 +39,6 @@ query='''CREATE TABLE IF NOT EXISTS Data  (
 );'''
 
 #curr.execute(query)
-
 
 
 # convert image to binary to insert it in local database
@@ -122,16 +122,31 @@ def get_data_from_interval():
         conn.commit()
         df=pd.DataFrame(data=data,columns=['Patient ID','Image Size','Date','Time','Result', 'Probability'])
         n = random.randint(1,99)
+
         filename='report' + str(n) # generate the file
-        path ='reports/' + filename +'.csv' 
+        path ='./API/reports/' + filename +'.csv'
         df.to_csv(path,index=False)
-        return 'Report has been generated in reports folder as ' + str(filename)
+        
+        total_patients= df['Patient ID'].unique().size
+        total_images=df.shape[0]
+        new_data=[total_patients,total_images]
+        summary=pd.DataFrame(new_data,index=['Total patients','Total images'],columns=['Result'])
+        total = df["Result"].value_counts()
+        total=pd.DataFrame(total) 
+        dataa=pd.concat([summary, total], join="inner")
+
+        filename2='summary' + str(n) # generate the file
+        path2 ='./API/reports/' + filename2 +'.csv'
+        dataa.to_csv(path2)
+
+        
+        return 'Reports has been generated in reports folder as ' + str(filename) + ' ' + str(filename2)
     except Exception as e :
         return e
     finally:
         if conn:
             conn.commit()
-            conn.close()
+
 
 def predict(input_img,model):
     img_size=(200,200)
@@ -308,8 +323,7 @@ def upload_unsaved_data():
             root.set(i)
             updateFlag(i['id'])
 
-
-# run the app every 3 minutes in order to upload unsaved data into firebase
+# run the app every 50 seconds in order to upload unsaved data into firebase
 
 if __name__ == "__main__":
     while 1:
@@ -317,5 +331,5 @@ if __name__ == "__main__":
         second_thread = threading.Thread(target=upload_unsaved_data)
         first_thread.start()
         second_thread.start()
-        time.sleep(300)
+        time.sleep(50)
 
